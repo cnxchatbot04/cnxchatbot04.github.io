@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ระบบลงเวลาเข้า-ออกงาน</title>
+    <link rel="icon" href="https://cdn-icons-png.flaticon.com/128/15267/15267807.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://cdn.jsdelivr.net/gh/lazywasabi/thai-web-fonts@7/fonts/LINESeedSansTH/LINESeedSansTH.css"
+        rel="stylesheet" />
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { line: '#06C755', dark: '#1e293b' },
+                    fontFamily: { prompt: ['LINE Seed Sans TH', 'Prompt', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        [v-cloak] {
+            display: none !important;
+        }
+
+        body {
+            background-color: #f8fafc;
+            font-family: 'LINE Seed Sans TH', 'Prompt', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .pb-safe {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app" v-cloak class="min-h-screen flex flex-col relative pb-safe">
+
+        <!-- Loading -->
+        <div v-if="loading"
+            class="fixed inset-0 bg-white/95 backdrop-blur-sm z-[9999] flex items-center justify-center transition-opacity duration-300">
+            <div class="flex flex-col items-center">
+                <img src="https://developers.line.biz/media/line-mini-app/LINE_spinner_light.svg" alt="Loading..."
+                    class="w-12 h-12 mb-4 animate-spin">
+                <p class="text-sm font-medium text-gray-500 animate-pulse mt-2">{{ loadingText }}</p>
+            </div>
+        </div>
+
+        <div v-else-if="!loading" class="flex flex-col min-h-screen">
+
+            <header class="bg-white px-6 pt-8 pb-10 rounded-b-[40px] shadow-sm relative z-10 text-center">
+                <div class="flex flex-col items-center">
+                    <div class="relative mb-4">
+                        <img :src="userProfile?.pictureUrl || 'https://via.placeholder.com/150'"
+                            class="w-24 h-24 rounded-full border-4 border-white shadow-md object-cover bg-gray-100">
+                        <div class="absolute bottom-1 right-1 w-5 h-5 bg-green-500 border-4 border-white rounded-full">
+                        </div>
+                    </div>
+                    <p class="text-gray-400 text-sm font-medium mb-1">ยินดีต้อนรับ,</p>
+                    <h1 class="text-2xl font-bold text-gray-800 tracking-tight">{{ userProfile?.displayName }}</h1>
+                </div>
+            </header>
+
+            <div class="flex-1 px-5 py-8 max-w-md mx-auto w-full flex flex-col justify-center space-y-6">
+
+                <div class="text-center mb-4">
+                    <p class="text-gray-500 text-sm mb-1">เวลาปัจจุบัน</p>
+                    <div class="text-4xl font-bold text-gray-800 tracking-wider">{{ currentTime }}</div>
+                </div>
+
+                <button @click="recordTime('in')"
+                    class="w-full bg-line text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-green-200 flex items-center justify-center space-x-3 hover:bg-green-600 transition transform active:scale-95 disabled:opacity-50"
+                    :disabled="submitting">
+                    <i class="fa-solid fa-right-to-bracket text-2xl"></i>
+                    <span>บันทึกเข้างาน</span>
+                </button>
+
+                <button @click="recordTime('out')"
+                    class="w-full bg-red-500 text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-red-200 flex items-center justify-center space-x-3 hover:bg-red-600 transition transform active:scale-95 disabled:opacity-50"
+                    :disabled="submitting">
+                    <i class="fa-solid fa-right-from-bracket text-2xl"></i>
+                    <span>บันทึกออกงาน</span>
+                </button>
+            </div>
+
+            <p class="text-center text-[10px] text-gray-400 pb-4">ระบบลงเวลาเข้า-ออกงาน v1.0</p>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+        const { createClient } = supabase;
+
+        // --- CONFIG ---
+        const LIFF_ID = "2009197431-Ps2iiZuS";
+        const WEBHOOK_URL = "https://qdbvctacpegyxwygwxsi.supabase.co/functions/v1/line-webhook";
+
+        const showAlert = (title, text, icon = 'success') => Swal.fire({ title, text, icon, confirmButtonColor: '#06C755' });
+
+        createApp({
+            data() {
+                return {
+                    loading: true,
+                    loadingText: 'กำลังโหลดข้อมูล...',
+                    submitting: false,
+                    userProfile: null,
+                    currentTime: '',
+                    timer: null,
+                }
+            },
+            mounted() {
+                this.updateTime();
+                this.timer = setInterval(this.updateTime, 1000);
+                this.initLiff();
+            },
+            beforeUnmount() {
+                if (this.timer) clearInterval(this.timer);
+            },
+            methods: {
+                updateTime() {
+                    const now = new Date();
+                    this.currentTime = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
+                async initLiff() {
+                    try {
+                        await liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true });
+                        if (!liff.isLoggedIn()) {
+                            liff.login({ redirectUri: window.location.href });
+                        } else {
+                            this.userProfile = await liff.getProfile();
+                            this.loading = false;
+                        }
+                    } catch (e) {
+                        console.error("LIFF Error", e);
+                        showAlert("Error", "LIFF Init Failed.", "error");
+                        this.loading = false;
+                    }
+                },
+                async recordTime(type) {
+                    if (!this.userProfile) return;
+
+                    let typeText = type === 'in' ? 'เข้างาน' : 'ออกงาน';
+
+                    const confirm = await Swal.fire({
+                        title: `ยืนยันการ${typeText}?`,
+                        text: `เวลา: ${this.currentTime}`,
+                        icon: 'question',
+                        showCancelButton: true,
+                        confirmButtonColor: '#06C755',
+                        cancelButtonColor: '#d33',
+                        confirmButtonText: 'ยืนยัน',
+                        cancelButtonText: 'ยกเลิก'
+                    });
+
+                    if (!confirm.isConfirmed) return;
+
+                    this.submitting = true;
+
+                    // Call Webhook
+                    try {
+                        const payload = {
+                            action: 'time-tracking',
+                            userId: this.userProfile.userId,
+                            displayName: this.userProfile.displayName,
+                            type: type,
+                            timestamp: new Date().toISOString()
+                        };
+
+                        const response = await fetch(WEBHOOK_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        const result = await response.json();
+
+                        if (result.success) {
+                            showAlert("สำเร็จ", `บันทึก${typeText}เรียบร้อยแล้ว`, "success");
+                        } else {
+                            showAlert("ผิดพลาด", result.message || "ไม่สามารถบันทึกข้อมูลได้", "error");
+                        }
+                    } catch (error) {
+                        console.error(error);
+                        showAlert("Error", "เกิดข้อผิดพลาดในการเชื่อมต่อ", "error");
+                    } finally {
+                        this.submitting = false;
+                    }
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>
